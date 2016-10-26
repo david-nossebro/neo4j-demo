@@ -1,8 +1,7 @@
 package org.demo;
 
-import org.neo4j.graphdb.GraphDatabaseService;
-import org.neo4j.graphdb.Label;
-import org.neo4j.graphdb.Node;
+import org.apache.commons.lang3.RandomUtils;
+import org.neo4j.graphdb.*;
 import org.neo4j.procedure.Context;
 import org.neo4j.procedure.PerformsWrites;
 import org.neo4j.procedure.Procedure;
@@ -12,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 /**
  * Hello world!
@@ -24,22 +24,76 @@ public class Procedures
     @Context
     public GraphDatabaseService db;
 
-    @Procedure("load.demodata")
+    @Procedure
     @PerformsWrites
-    public void loadDemoData() {
+    public Stream loaddata() {
 
-        List<Node> persons = createRandomNodeList(1000, () -> randomPerson());
-        List<Node> cars = createRandomNodeList(200, () -> randomCar());
-        List<Node> stations = createRandomNodeList(100, () -> randomStation());
+        List<Node> persons = createRandomList(1000, () -> randomPerson());
+        List<Node> cars = createRandomList(200, () -> randomCar());
+        List<Node> stations = createRandomList(100, () -> randomStation());
 
+        connectRandomCloseStations(80, stations);
+
+        List<Node> trips = createRandomTripList(10000, persons, cars, stations);
+
+        return Stream.of("OK");
     }
 
-    private List<Node> createRandomNodeList(int nrOfEntities, Supplier<Node> randomizer) {
-        List<Node> list = new ArrayList<>();
+    private <T> List<T> createRandomList(int nrOfEntities, Supplier<T> randomizer) {
+        List<T> list = new ArrayList<>(nrOfEntities);
         IntStream.range(0, nrOfEntities).forEach(i -> list.add(randomizer.get()));
         return list;
     }
 
+    private List<Node> createRandomTripList(int nrOfEntities, List<Node> persons, List<Node> cars, List<Node> stations) {
+        List<Node> list = new ArrayList<>(nrOfEntities);
+        IntStream.range(0, nrOfEntities).forEach(i -> {
+            list.add(randomTrip(persons, cars, stations));
+        });
+        return list;
+    }
+
+    private <T> T getRandom(List<T> list) {
+        if(list == null || list.isEmpty()) {
+            throw new IllegalArgumentException("List must contain entities");
+        }
+        return list.get(RandomUtils.nextInt(0, list.size()));
+    }
+
+
+    private void connectRandomCloseStations(int connections, List<Node> stations) {
+        RelationshipType relType = RelationshipType.withName("CLOSE_STATION");
+        IntStream.range(0, connections).forEach(i -> {
+            Node stationA;
+            Node stationB;
+            do {
+                stationA = getRandom(stations);
+                stationB = getRandom(stations);
+            } while(checkRelationshipBetweenNodes(stationA, stationB, relType));
+
+            Relationship relation = stationA.createRelationshipTo(stationB, relType);
+            relation.setProperty("distance", StationRandomizer.randomDistance());
+        });
+    }
+
+
+    private Node randomTrip(List<Node> persons, List<Node> cars, List<Node> stations) {
+        Node trip = db.createNode(Label.label("Trip"));
+        trip.setProperty("uid", UUID.randomUUID());
+        trip.setProperty("distance", TripRandomizer.randomDistance());
+
+        Node person = getRandom(persons);
+        Node car = getRandom(cars);
+        Node fromStation = getRandom(stations);
+        Node toStation = getRandom(stations);
+
+        trip.createRelationshipTo(person, RelationshipType.withName("DRIVER"));
+        trip.createRelationshipTo(car, RelationshipType.withName("CAR"));
+        trip.createRelationshipTo(fromStation, RelationshipType.withName("FROM"));
+        trip.createRelationshipTo(toStation, RelationshipType.withName("TO"));
+
+        return trip;
+    }
 
     private Node randomPerson() {
         Node person = db.createNode(Label.label("Person"));
@@ -77,4 +131,13 @@ public class Procedures
         return db.findNode(label, propertyName, propertyValue) != null;
     }
 
+    private boolean checkRelationshipBetweenNodes(Node stationA, Node stationB, RelationshipType rel) {
+        for(Relationship r : stationA.getRelationships(rel)) {
+            if (r.getOtherNode(stationA).equals(stationB)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
